@@ -1,14 +1,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -19,10 +24,17 @@ import (
 type Config struct {
 	Debug bool   `default:"false"`
 	Port  string `default:"8080"`
+	Env   string `envconfig:"ENV"`
 }
 
 var k8sClient kubernetes.Interface
 var conf = &Config{}
+
+const (
+	BADGE_COLOR_FATAL   = "red"
+	BADGE_COLOR_WARN    = "yellow"
+	BADGE_COLOR_HEALTHY = "blue"
+)
 
 func main() {
 	godotenv.Load()
@@ -44,15 +56,29 @@ func main() {
 		panic(err)
 	}
 
-	server := http.Server{
-		Addr: ":" + conf.Port,
-	}
-	http.HandleFunc("/healthz", healthz)
-	http.HandleFunc("/pods", handlePods)
+	e := echo.New()
+	e.GET("/healthz", healthz)
+	e.HEAD("/healthz", healthz)
+	e.GET("/pods", handlePods)
+	e.GET("/nodes", handleNodes)
 
-	slog.Info(fmt.Sprintf("Starting server http://localhost:%s", conf.Port))
-	if err := server.ListenAndServe(); err != nil {
-		panic(err)
+	e.Use(middleware.Logger())
+	e.Use(middleware.Recover())
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	go func() {
+		if err := e.Start(":" + conf.Port); err != nil && err != http.ErrServerClosed {
+			e.Logger.Fatal("shutting down the server")
+		}
+	}()
+
+	<-ctx.Done()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := e.Shutdown(ctx); err != nil {
+		e.Logger.Fatal(err)
 	}
 }
 
@@ -76,23 +102,56 @@ func newClient(conf *Config) (kubernetes.Interface, error) {
 	return client, nil
 }
 
-func healthz(w http.ResponseWriter, r *http.Request) {
-	slog.Info(fmt.Sprintf("%s %s", r.Method, r.URL.Path))
-	w.Write([]byte("ok"))
+func healthz(ctx echo.Context) error {
+	return ctx.JSON(http.StatusOK, "ok")
 }
 
-func handlePods(w http.ResponseWriter, r *http.Request) {
-	slog.Info(fmt.Sprintf("%s %s", r.Method, r.URL.Path))
-	pods, err := k8sClient.CoreV1().Pods("").List(r.Context(), v1.ListOptions{})
+func handlePods(ctx echo.Context) error {
+	pods, err := k8sClient.CoreV1().Pods("").List(ctx.Request().Context(), v1.ListOptions{})
 	if err != nil {
 		slog.Error(err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return ctx.JSON(http.StatusInternalServerError, err.Error())
 	}
 	healthyPodsCount := 0
 	for _, pod := range pods.Items {
-		if pod.Status.Phase == "Running" || pod.Status.Phase == "Completed" {
+		if pod.Status.Phase == "Running" || pod.Status.Phase == "Succeeded" {
 			healthyPodsCount++
 		}
 	}
+	var color string
+	rate := float64(healthyPodsCount) / float64(len(pods.Items))
+	if rate < 0.5 {
+		color = BADGE_COLOR_FATAL
+	} else if rate < 0.8 {
+		color = BADGE_COLOR_WARN
+	} else {
+		color = BADGE_COLOR_HEALTHY
+	}
+	return ctx.JSON(http.StatusOK, echo.Map{
+		"schemaVersion": 1,
+		"label":         fmt.Sprintf("pods(%s)", conf.Env),
+		"message":       fmt.Sprintf("%d/%d", healthyPodsCount, len(pods.Items)),
+		"color":         color,
+	})
+}
+
+func handleNodes(ctx echo.Context) error {
+	nodes, err := k8sClient.CoreV1().Nodes().List(ctx.Request().Context(), v1.ListOptions{})
+	if err != nil {
+		slog.Error(err.Error())
+		return ctx.JSON(http.StatusInternalServerError, err.Error())
+	}
+	healthyNodesCount := 0
+	for _, node := range nodes.Items {
+		conditions := node.Status.Conditions
+		if conditions[len(conditions)-1].Status == "True" {
+			healthyNodesCount++
+		}
+	}
+	return ctx.JSON(http.StatusOK, echo.Map{
+		"schemaVersion": 1,
+		"label":         fmt.Sprintf("nodes(%s)", conf.Env),
+		"message":       fmt.Sprintf("%d/%d", healthyNodesCount, len(nodes.Items)),
+		"color":         "blue",
+	})
 }
