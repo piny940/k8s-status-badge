@@ -114,7 +114,7 @@ func handlePods(ctx echo.Context) error {
 	}
 	healthyPodsCount := 0
 	for _, pod := range pods.Items {
-		if pod.Status.Phase == "Running" || pod.Status.Phase == "Completed" {
+		if pod.Status.Phase == "Running" || pod.Status.Phase == "Succeeded" {
 			healthyPodsCount++
 		}
 	}
