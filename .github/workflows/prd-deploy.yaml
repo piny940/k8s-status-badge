@@ -11,6 +11,7 @@ permissions:
 jobs:
   stg-build:
     runs-on: ubuntu-latest
+    environment: production
     steps:
       - uses: actions/checkout@v4
       - name: Login to GitHub Container Registry
