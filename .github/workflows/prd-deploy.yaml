@@ -15,18 +15,8 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+      - uses: ./.github/actions/docker-build
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Build and push Docker Image
-        uses: docker/build-push-action@v6
-        with:
-          push: true
-          context: .
-          file: ./Dockerfile
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+          github-actor: ${{ github.actor }}
           tags: ghcr.io/${{ github.repository }}:1.0.${{ github.run_number }}
