@@ -16,7 +16,7 @@ jobs:
     if: github.event_name == 'pull_request'
     environment: staging # 管理者の承認を必要とする
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/docker-build
         with:
           gh-token: ${{ secrets.GITHUB_TOKEN }}
@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/docker-build
         with:
           gh-token: ${{ secrets.GITHUB_TOKEN }}
